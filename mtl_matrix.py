@@ -3,6 +3,11 @@ import torch
 from rdkit.Chem.Scaffolds.MurckoScaffold import MurckoScaffoldSmiles
 from sklearn.model_selection import train_test_split
 
+import numpy as np
+import random
+import torch
+import pandas as pd
+
 __all__ = ["MatrixSplitter"]
 
 
@@ -71,6 +76,14 @@ def add_scf_columns(df):
     )
 
     return combined_df_copy
+
+
+def set_seed(seed=42):
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    #if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(seed)
 
 
 class MatrixSplitter:
@@ -235,7 +248,7 @@ class MatrixSplitter:
         for split, split_df in dataset_splits.items():
             merged_df = (
                 descs.merge(split_df, on="SMILES_stand", how="inner")
-                .sample(frac=1, random_state=42)
+                .sample(frac=1, random_state=40)
                 .reset_index(drop=True)
             )
             data_dict[split] = {
@@ -259,7 +272,7 @@ class MatrixSplitter:
             targets_test = Y_test.columns.tolist()
 
         # Unique list of target columns to retain in training
-        target_columns = list(set(targets_val + targets_test))
+        target_columns = list(dict.fromkeys(targets_val + targets_test))
 
         # Filter train dataset based on identified target columns
         Y_train_filtered = Y_train.filter(items=target_columns, axis=1)
@@ -299,3 +312,4 @@ class MatrixSplitter:
         }
 
         return {"dfs": imp_df_dict, "tensors": imp_tens_dict}
+
