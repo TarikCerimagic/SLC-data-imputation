@@ -143,7 +143,7 @@ def r_squared(output, target):
 # Compute R^2 score for valid test columns
 def get_performance_scores(y_test, y_pred):
     eval_dict = {}
-    valid_columns = [col for col in y_test.columns if len(y_test[col].dropna()) >= 5]
+    valid_columns = [col for col in y_test.columns if len(y_test[col].dropna()) >= 1]
 
     if not valid_columns:
         print("No columns have more than 4 values.")

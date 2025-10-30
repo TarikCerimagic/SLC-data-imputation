@@ -5,6 +5,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.neighbors import NearestNeighbors
 from PIL import Image
+from fancyimpute import SoftImpute, IterativeSVD, BiScaler, NuclearNormMinimization, MatrixFactorization, KNN
+from sklearn.impute import SimpleImputer, IterativeImputer, KNNImputer
+from sklearn.model_selection import ParameterGrid
+
 
 
 def custom_loss(output: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -297,6 +301,307 @@ def evaluation_metrics_f1(res_dict_cd, cv_dictio_cddd):
     df_reorder = cd_metrics_pd[cd_metrics_pd.columns[-6:].tolist() + cd_metrics_pd.columns[:-6].tolist()].drop(columns='MTS')
     
     return df_reorder
+
+
+def concatanate_train_val_data(prediction_data_dict, imputation_data_dict):
+    """
+    Combines training and validation data for prediction and imputation workflows,
+    and prints dataset size summaries.
+    
+    Parameters:
+    prediction_data_dict (dict): Dictionary with train/val/test DataFrames for prediction (X, y).
+    imputation_data_dict (dict): Dictionary with train/val/test DataFrames for imputation (X, y).
+    
+    Returns:
+    tuple:
+        pd.DataFrame: Combined prediction train+val DataFrame.
+        pd.DataFrame: Merged imputation DataFrame with non-null values prioritized.
+                      Merge combines train and validation matrices; test fields remain empty.
+    """
+    
+    # Concatenate X and y prediction DataFrames
+    pred_train_df = pd.concat(
+        [prediction_data_dict['dfs']['train']['X'], prediction_data_dict['dfs']['train']['y']], axis=1
+    )
+    pred_val_df = pd.concat(
+        [prediction_data_dict['dfs']['val']['X'], prediction_data_dict['dfs']['val']['y']], axis=1
+    )
+    pred_train_val_df = pd.concat([pred_train_df, pred_val_df], axis=0)
+
+    # Concatenate X and y imputation DataFrames
+    imp_train_df = pd.concat(
+        [imputation_data_dict['dfs']['train']['X'], imputation_data_dict['dfs']['train']['y']], axis=1
+    )
+    imp_val_df = pd.concat(
+        [imputation_data_dict['dfs']['val']['X'], imputation_data_dict['dfs']['val']['y']], axis=1
+    )
+
+    # Merge on 'SMILES_stand'
+    imp_merged = pd.merge(
+        imp_train_df, imp_val_df, on='SMILES_stand', how='outer', suffixes=('_df1', '_df2')
+    )
+
+    # Column combination using vectorized operations
+    cols_to_combine = [col for col in imp_val_df.columns if col != 'SMILES_stand']
+
+    combined_cols = {
+        col: imp_merged[f'{col}_df1'].combine_first(imp_merged[f'{col}_df2'])
+        for col in cols_to_combine
+    }
+
+    # Build final DataFrame
+    imp_merged = pd.concat(
+        [imp_merged[['SMILES_stand']], pd.DataFrame(combined_cols, index=imp_merged.index)],
+        axis=1
+    )
+
+    # Summary statistics for prediction data
+    print('Post-merging data sizes\n'
+          '\n - Prediction data\n'
+          '   - Number of compounds in train + val data:', pred_train_val_df.iloc[:, 513:].shape[0],
+          '\n   - Number of targets in train + val data:', pred_train_val_df.iloc[:, 513:].shape[1],
+          '\n   - Number of filled outputs in train + val matrix:', pred_train_val_df.iloc[:, 513:].notna().sum().sum(),
+          '\n   - Number of filled outputs in test matrix:', prediction_data_dict['dfs']['test']['y'].notna().sum().sum(),
+          '\n   - Total number of interactions:',
+          pred_train_val_df.iloc[:, 513:].notna().sum().sum() + prediction_data_dict['dfs']['test']['y'].notna().sum().sum())
+
+    # Summary statistics for imputation data
+    print('\n - Imputation data\n'
+          '   - Number of compounds in train + val data:', imp_merged.iloc[:, 513:].shape[0],
+          '\n   - Number of targets in train + val data:', imp_merged.iloc[:, 513:].shape[1],
+          '\n   - Number of filled outputs in train + val matrix:', imp_merged.iloc[:, 513:].notna().sum().sum(),
+          '\n   - Number of filled outputs in test matrix:', imputation_data_dict['dfs']['test']['y'].notna().sum().sum(),
+          '\n   - Total number of interactions:',
+          imp_merged.iloc[:, 513:].notna().sum().sum() + imputation_data_dict['dfs']['test']['y'].notna().sum().sum())
+
+    return pred_train_val_df, imp_merged
+
+
+def imputation_data_editor(filled_matrix, data_dict, dataset, device='cuda'):
+    """
+    Converts an imputed NumPy matrix into a torch tensor aligned with target compounds
+    (val/test), and evaluates performance using R² and MSE.
+
+    Parameters:
+        filled_matrix (np.ndarray): Imputed matrix from train fit_transform().
+        data_dict (dict): Dataset containing dfs and tensors.
+        dataset (str): One of {'val', 'test'}.
+        device (str): Device for torch tensors.
+
+    Returns:
+        tuple: (torch.Tensor, r2, mse)
+    """
+
+    # Reference training data structure for columns
+    imp_train_df = pd.concat(
+        [data_dict['dfs']['train']['X'], data_dict['dfs']['train']['y']], axis=1
+    )
+
+    # Build DataFrame with imputed values and proper column names
+    filled_df = pd.DataFrame(filled_matrix, columns=imp_train_df.columns[1:])
+    filled_df['SMILES_stand'] = imp_train_df['SMILES_stand']
+    filled_df = filled_df[['SMILES_stand'] + list(filled_df.columns[:-1])]
+
+    # Keep only Y (target) columns
+    filled_targets_df = filled_df.drop(columns=filled_df.columns[1:513])
+
+    # Align imputed matrix to validation/test SMILES
+    test_y = data_dict['dfs'][dataset]['y'].copy()
+    test_y['SMILES_stand'] = data_dict['dfs'][dataset]['X']['SMILES_stand']
+    test_y_sorted = test_y[['SMILES_stand'] + list(test_y.columns[:-1])]
+
+    filled_aligned = filled_targets_df[
+        filled_targets_df['SMILES_stand'].isin(test_y_sorted['SMILES_stand'])
+    ].set_index('SMILES_stand').loc[test_y_sorted['SMILES_stand']].reset_index(drop=True)
+
+    # Convert to tensor
+    X_filled_tensor = torch.tensor(filled_aligned.values, dtype=torch.float32).to(device)
+
+    # Evaluate performance
+    r2 = r_squared(X_filled_tensor, data_dict['tensors'][dataset]['y']).item()
+    mse = custom_loss(X_filled_tensor, data_dict['tensors'][dataset]['y'].to(device)).item()
+
+    return X_filled_tensor, r2, mse
+
+
+
+def fancy_impute_optimized(data_dict, method='SoftImpute', device='cuda', param_grids=None):
+    """
+    Performs imputation using fancyimpute methods with validation-based hyperparameter optimization.
+    Trains on the training set, selects best hyperparameters using the validation set (lowest MSE),
+    and evaluates the final imputer on the test set.
+
+    Returns:
+        dict with validation/test R², test MSE, and best parameters.
+    """
+
+    imputers = {
+        'SoftImpute': lambda **kw: SoftImpute(**kw),
+        'NuclearNormMinimization': lambda **kw: NuclearNormMinimization(**kw),
+        'BiScaler': lambda **kw: BiScaler(**kw),
+        'MatrixFactorization': lambda **kw: MatrixFactorization(**kw),
+        'IterativeSVD': lambda **kw: IterativeSVD(**kw),
+        'KNN': lambda **kw: KNN(**kw)
+    }
+
+    if method not in imputers:
+        raise ValueError(f"Invalid imputer: {method}")
+
+    # Select parameter grid for the chosen imputer
+    if isinstance(param_grids, dict) and method in param_grids:
+        param_grid = param_grids[method]
+    else:
+        param_grid = param_grids  # could be None or a single dict
+
+    # --- Training matrix (X + Y) ---
+    X_train = torch.cat(
+        (data_dict['tensors']['train']['X'], data_dict['tensors']['train']['y']),
+        dim=1
+    ).cpu().numpy()
+
+    # --- If no grid is provided ---
+    if param_grid is None:
+        imputer = imputers[method]()
+        imputed_train = imputer.fit_transform(X_train)
+        print(f'Param grid not provided for {method}. Using default parameters.')
+        # Evaluate directly on val/test
+        _, r2_val, mse_val = imputation_data_editor(imputed_train, data_dict, 'val', device=device)
+        _, r2_test, mse_test = imputation_data_editor(imputed_train, data_dict, 'test', device=device)
+        best_params = {}
+    else:
+        best_mse_val = np.inf
+        best_params = None
+        best_r2_val = None
+
+        for params in ParameterGrid(param_grid):
+            try:
+                imputer = imputers[method](**params)
+                imputed_train = imputer.fit_transform(X_train)
+                _, r2_val, mse_val = imputation_data_editor(imputed_train, data_dict, 'val', device=device)
+
+                # Optimization criterion: minimize MSE (closer to zero)
+                if mse_val < best_mse_val:
+                    best_mse_val = mse_val
+                    best_r2_val = r2_val
+                    best_params = params
+
+            except Exception as e:
+                print(f"Skipping params {params} due to error: {e}")
+                continue
+
+        print(f"\nBest {method} parameters: {best_params} | Val MSE = {best_mse_val:.6f}, Val R² = {best_r2_val:.4f}")
+        imputer = imputers[method](**best_params)
+        imputed_train = imputer.fit_transform(X_train)
+        _, r2_test, mse_test = imputation_data_editor(imputed_train, data_dict, 'test', device=device)
+        mse_val = best_mse_val
+        r2_val = best_r2_val
+
+    print(f"{method}: Val MSE = {mse_val:.6f}, Val R² = {r2_val:.4f}, Test R² = {r2_test:.4f}, Test MSE = {mse_test:.6f}")
+
+    return {
+        "method": method,
+        "best_params": best_params,
+        "val_r2": r2_val,
+        "test_r2": r2_test,
+        "val_mse": mse_val,
+        "test_mse": mse_test
+    }
+
+
+
+def scikit_impute_optimized(data_dict, method='KNNImputer', device='cuda', param_grids=None):
+    """
+    Performs imputation using scikit-learn imputers with optional validation-based hyperparameter optimization.
+    Trains on the training set, selects best hyperparameters using the validation set,
+    and evaluates the final imputer on the test set.
+
+    Returns:
+        dict with validation/test R², test MSE, and best parameters.
+    """
+
+    imputers = {
+        'SimpleImputer': lambda **kw: SimpleImputer(**kw),
+        'KNNImputer': lambda **kw: KNNImputer(**kw),
+        'IterativeImputer': lambda **kw: IterativeImputer(**kw, random_state=0)
+    }
+
+    if method not in imputers:
+        raise ValueError(f"Invalid imputer: {method}")
+
+    # Select parameter grid for the chosen imputer
+    if isinstance(param_grids, dict) and method in param_grids:
+        param_grid = param_grids[method]
+    else:
+        param_grid = param_grids  # could be None or a single dict
+
+    # Training matrix preparation
+    X_train = pd.concat([data_dict['dfs']['train']['X'], data_dict['dfs']['train']['y']], axis=1).drop(columns='SMILES_stand').to_numpy()
+
+
+    # Validation and testing matricase for prediction
+    # Validation
+    val_place_holder_tens = data_dict['tensors']['val']['y'].clone().float()
+    val_place_holder_tens.fill_(float('nan'))
+    val_array_empty_tens = torch.cat((data_dict['tensors']['val']['X'], val_place_holder_tens), dim=1)
+    X_Y_empty_val = val_array_empty_tens.cpu().numpy()
+
+
+    # Test
+    place_holder_tens = data_dict['tensors']['test']['y'].clone().float()
+    place_holder_tens.fill_(float('nan'))
+    test_array_tens = torch.cat((data_dict['tensors']['test']['X'], place_holder_tens), dim=1)
+    X_Y_empty_test = test_array_tens.cpu().numpy()
+
+    # If no grid is provided: use default imputer
+    if param_grid is None:
+        imputer = imputers[method]()
+        imputer.fit(X_train)
+    else:
+        # Hyperparameter optimization on validation set
+        best_r2_val, best_params = -np.inf, None
+
+        for params in ParameterGrid(param_grid):
+            imputer = imputers[method](**params)
+            imputer.fit(X_train)
+
+            imputed_val = imputer.transform(X_Y_empty_val)
+            y_val_pred = torch.from_numpy(imputed_val[:, -data_dict['tensors']['val']['y'].shape[1]:]).float().to(device)
+
+            r2_val = r_squared(y_val_pred, data_dict['tensors']['val']['y']).item()
+            if r2_val > best_r2_val:
+                best_r2_val = r2_val
+                best_params = params
+
+        print(f"\nBest {method} parameters: {best_params} | Val R² = {best_r2_val:.4f}")
+
+        # Retrain on train+val with best params before testing
+        imputer = imputers[method](**best_params)
+        imputer.fit(X_train)
+
+    # Evaluate on validation and test
+    imputed_val = imputer.transform(X_Y_empty_val)
+    imputed_test = imputer.transform(X_Y_empty_test)
+
+    y_val_pred = torch.from_numpy(imputed_val[:, -data_dict['tensors']['val']['y'].shape[1]:]).float().to(device)
+    y_test_pred = torch.from_numpy(imputed_test[:, -data_dict['tensors']['test']['y'].shape[1]:]).float().to(device)
+
+    r2_val = r_squared(y_val_pred, data_dict['tensors']['val']['y']).item()
+    r2_test = r_squared(y_test_pred, data_dict['tensors']['test']['y']).item()
+    mse_val = custom_loss(y_val_pred, data_dict['tensors']['val']['y']).item()
+    mse_test = custom_loss(y_test_pred, data_dict['tensors']['test']['y']).item()
+
+    print(f"{method}: Test R² = {r2_test:.4f}, MSE = {mse_test:.4f}")
+
+    return {
+        "method": method,
+        "best_params": None if param_grid is None else best_params,
+        "val_r2": r2_val,
+        "test_r2": r2_test,
+        "val_mse": mse_val,
+        "test_mse": mse_test
+    }
+
+
 
 
 def mask_none_predictions(true_y, pred_y_tens):
@@ -602,35 +907,45 @@ def cv_evaluation_processing(list_of_dicts):
     return cv_r2_df_list
 
 
-def plot_confidence_per_target(cv_r2_df_list):
+def plot_confidence_per_target(cv_r2_df_list, excluded_targets):
     """
     Merges cross-validation results and generates a box plot of Q² values per target.
-
+    
     Args:
         cv_r2_df_list (list): List of DataFrames with cross-validation results.
-
+        
     Returns:
         pd.DataFrame: Processed DataFrame with transposed values for visualization.
     """
-    cv_r2_merged_df = reduce(
-        lambda left, right: pd.merge(left, right, on="SLC_name", how="inner"),
-        cv_r2_df_list,
-    )
-    cv_r2_merged_df.set_index("SLC_name", inplace=True)
+    cv_r2_merged_df = reduce(lambda left, right: pd.merge(left, right, on='SLC_name', how='inner'), cv_r2_df_list)
+    cv_r2_merged_df.set_index('SLC_name', inplace=True)
     df_values = cv_r2_merged_df.T
-
+    
     # Exclude problematic target
-    excluded_targets = ["SLC11A2"]
-    df_filtered = df_values.drop(columns=excluded_targets, errors="ignore")
+    df_filtered = df_values.drop(columns=excluded_targets, errors='ignore')
 
+    # Determine y-axis limits dynamically
+    ymin = np.floor(df_filtered.min().min() - 0.1)
+    ymax = np.ceil(1.05)
+    
     # Box plot configuration
+    # Dynamic y-limits
+    ymin = np.floor(df_filtered.min().min() - 0.1)
+    ymax = 1.05  # ensures 1.0 shows
+
+    # Create tick positions in steps of 0.25
+    yticks = np.arange(ymin, ymax + 0.01, 0.25)
+
+    # Plot
     plt.figure(figsize=(25, 15), dpi=600)
     df_filtered.boxplot()
-    plt.xlabel("Targets", fontsize=30)
-    plt.ylabel("Q² values", fontsize=30)
+    plt.xlabel('Targets', fontsize=30)
+    plt.ylabel('Q² values', fontsize=30)
     plt.xticks(rotation=45, fontsize=25)
-    plt.yticks(np.arange(-5, 1.1, step=0.25), fontsize=25)
+    plt.yticks(yticks, fontsize=15)
+    plt.ylim(ymin, ymax)
     plt.grid(True)
+    plt.tight_layout()
     plt.show()
 
     return df_values
