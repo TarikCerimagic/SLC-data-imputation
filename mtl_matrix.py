@@ -251,6 +251,7 @@ class MatrixSplitter:
                 .sample(frac=1, random_state=40)
                 .reset_index(drop=True)
             )
+            merged_df.insert(0, 'SMILES_stand', merged_df.pop('SMILES_stand'))
             data_dict[split] = {
                 "X": merged_df.iloc[:, :desc_length],  # Extract descriptor features
                 "y": merged_df.iloc[:, desc_length:],  # Extract target values

@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from chembl_webresource_client import new_client
 from scipy.stats import sem
+import re
 
 
 class DataFetcher:
@@ -92,7 +93,12 @@ def filter_mutant_targets(filtered_data, substrings_to_search):
         filtered_mutants.shape,
     )
 
-    return filtered_mutants
+    return filtered_mutants, matched_strings
+
+
+
+
+
 
 
 def threshold_and_average_activities(data, threshold, method):

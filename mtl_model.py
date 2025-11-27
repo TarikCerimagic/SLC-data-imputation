@@ -469,3 +469,214 @@ def cross_val_internal(clean_data, num_of_targets, param_d, device, seed):
     }
 
     return cv_dictio, losses_dict_cv, just_eval_dict_list
+
+
+
+
+def _valid_pairs_df(y_true_df: pd.DataFrame,
+                    y_pred_df: pd.DataFrame,
+                    require_nonneg: bool = False):
+    """
+    Returns flattened arrays of y_true, y_pred for all entries where both are finite.
+    If require_nonneg=True, also ensures both are >= 0 (for MSLE).
+    """
+    # Align index/columns just in case
+    y_pred_df = y_pred_df.reindex(index=y_true_df.index, columns=y_true_df.columns)
+
+    yt = y_true_df.values
+    yp = y_pred_df.values
+
+    mask = np.isfinite(yt) & np.isfinite(yp)
+    if require_nonneg:
+        mask &= (yt >= 0) & (yp >= 0)
+
+    yt_valid = yt[mask]
+    yp_valid = yp[mask]
+    return yt_valid, yp_valid
+
+def safe_mae_df(y_true_df: pd.DataFrame, y_pred_df: pd.DataFrame):
+    yt, yp = _valid_pairs_df(y_true_df, y_pred_df, require_nonneg=False)
+    return np.nan if yt.size == 0 else np.mean(np.abs(yt - yp))
+
+def safe_rmse_df(y_true_df: pd.DataFrame, y_pred_df: pd.DataFrame):
+    yt, yp = _valid_pairs_df(y_true_df, y_pred_df, require_nonneg=False)
+    return np.nan if yt.size == 0 else np.sqrt(np.mean((yt - yp) ** 2))
+
+def safe_msle_df(y_true_df: pd.DataFrame, y_pred_df: pd.DataFrame):
+    yt, yp = _valid_pairs_df(y_true_df, y_pred_df, require_nonneg=True)
+    return np.nan if yt.size == 0 else np.mean((np.log1p(yp) - np.log1p(yt)) ** 2)
+
+def _nanaware_summary(values_list):
+    """Return [nanmean, nanstd, nanstd/sqrt(n_eff)] with NaN handling."""
+    arr = np.asarray(values_list, dtype=float)
+    n_eff = np.sum(~np.isnan(arr))
+    if n_eff == 0:
+        return [np.nan, np.nan, np.nan]
+    mean = np.nanmean(arr)
+    std = np.nanstd(arr)
+    se = std / np.sqrt(n_eff)
+    return [mean, std, se]
+
+def get_performance_scores_aligned(y_true_df: pd.DataFrame, y_pred_df: pd.DataFrame):
+    """
+    Compute per-target R2 with proper alignment and shared masks.
+    Returns a dict {column: r2 or NaN}.
+    """
+    # Align index/columns
+    y_pred_df = y_pred_df.reindex(index=y_true_df.index, columns=y_true_df.columns)
+
+    eval_dict = {}
+    for col in y_true_df.columns:
+        yt = y_true_df[col].to_numpy()
+        yp = y_pred_df[col].to_numpy()
+        # Shared validity mask: both finite
+        mask = np.isfinite(yt) & np.isfinite(yp)
+        # r2_score needs at least 2 samples
+        if np.count_nonzero(mask) >= 2:
+            eval_dict[col] = r2_score(yt[mask], yp[mask])
+        else:
+            eval_dict[col] = np.nan
+    return eval_dict
+
+def cross_val_internal3(clean_data, num_of_targets, param_d, device, seed,
+                        drop_all_nan_targets=True):
+    """
+    Performs 5-fold cross-validation on the given dataset.
+
+    Args:
+        clean_data (pd.DataFrame): The preprocessed dataset. Must contain:
+            - feature columns,
+            - the last `num_of_targets` columns as targets,
+            - a 'new_target_label' stratification label,
+            - a 'SMILES_stand' column to be dropped.
+        num_of_targets (int): Number of target columns at the end of the dataframe.
+        param_d (dict): Model parameters.
+        device (torch.device): Device to run on.
+        seed (int): Random seed.
+        drop_all_nan_targets (bool): If True, drop rows where all targets are NaN
+                                     to avoid empty-valid-pair folds.
+
+    Returns:
+        tuple:
+            - cv_dictio (dict): {metric: [mean, std, se]} across folds (NaN-aware).
+            - losses_dict_cv (dict): 'train_losses_list' and 'val_losses_list' per fold.
+            - just_eval_dict_list (list): Performance summaries per fold.
+    """
+    print(f"Cross-validation with seed: {seed}")
+
+    # Drop non-feature column
+    combined_df_copy = clean_data.drop(columns=["SMILES_stand"])
+
+    # Optionally drop rows where all targets are NaN to reduce empty folds
+    if drop_all_nan_targets:
+        target_cols = combined_df_copy.columns[-num_of_targets:]
+        before = len(combined_df_copy)
+        combined_df_copy = combined_df_copy.dropna(subset=target_cols, how="all")
+        after = len(combined_df_copy)
+        if before != after:
+            print(f"Dropped {before - after} rows with all-NaN targets.")
+
+    # Initialize Stratified K-Fold
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=seed)
+
+    # Initialize metrics dictionary
+    metrics_dict = {
+        "train_loss": [],
+        "val_loss": [],
+        "train_r2": [],
+        "val_r2": [],
+        "rmse": [],
+        "mae": [],
+        "msle": [],
+    }
+
+    losses_dict_cv = {"train_losses_list": [], "val_losses_list": []}
+    just_eval_dict_list = []
+
+    # Cross-validation loop
+    for count, (train_index, val_index) in enumerate(
+        skf.split(combined_df_copy, combined_df_copy["new_target_label"])
+    ):
+        train_kf = combined_df_copy.iloc[train_index]
+        val_kf = combined_df_copy.iloc[val_index]
+
+        # Split into features (X) and targets (y)
+        X_train_kf = train_kf.drop(columns=["new_target_label"]).iloc[:, :-num_of_targets]
+        X_val_kf   = val_kf.drop(columns=["new_target_label"]).iloc[:, :-num_of_targets]
+        y_train_kf = train_kf.drop(columns=["new_target_label"]).iloc[:, -num_of_targets:]
+        y_val_kf   = val_kf.drop(columns=["new_target_label"]).iloc[:, -num_of_targets:]
+
+        # Optional user check
+        check_target_content(y_train_kf)
+
+        # Convert to tensors
+        X_train_kf_tensor = torch.tensor(X_train_kf.values, dtype=torch.float32, device=device)
+        X_val_kf_tensor   = torch.tensor(X_val_kf.values,   dtype=torch.float32, device=device)
+        y_train_kf_tensor = torch.tensor(y_train_kf.values, dtype=torch.float32, device=device)
+        y_val_kf_tensor   = torch.tensor(y_val_kf.values,   dtype=torch.float32, device=device)
+
+        # Train model
+        cv_tensors_dict = {
+            "train": {"X": X_train_kf_tensor, "y": y_train_kf_tensor},
+            "val":   {"X": X_val_kf_tensor,   "y": y_val_kf_tensor},
+        }
+        cv_data_dict = {"tensors": cv_tensors_dict}
+
+        model_kf, train_mean_losses, val_mean_losses, val_mean_accuracies = train_model(
+            cv_data_dict, param_d, epochs=300, seed=seed, device=device
+        )
+
+        # Store losses
+        losses_dict_cv["train_losses_list"].append(train_mean_losses)
+        losses_dict_cv["val_losses_list"].append(val_mean_losses)
+
+        # Model evaluation
+        with torch.no_grad():
+            predicted_values_train_kf = model_kf(X_train_kf_tensor)
+            predicted_values_val_kf   = model_kf(X_val_kf_tensor)
+
+        # If your model returns a list/tuple, concatenate along feature dim
+        if isinstance(predicted_values_train_kf, (list, tuple)):
+            y_pred_cuda_train_kf = torch.cat(predicted_values_train_kf, dim=1)
+            y_pred_cuda_val_kf   = torch.cat(predicted_values_val_kf,   dim=1)
+        else:
+            y_pred_cuda_train_kf = predicted_values_train_kf
+            y_pred_cuda_val_kf   = predicted_values_val_kf
+
+        # Compute tensor-based metrics
+        metrics_dict["train_loss"].append(custom_loss(y_pred_cuda_train_kf, y_train_kf_tensor).item())
+        metrics_dict["val_loss"].append(custom_loss(y_pred_cuda_val_kf,   y_val_kf_tensor).item())
+        metrics_dict["train_r2"].append(r_squared(y_pred_cuda_train_kf, y_train_kf_tensor).item())
+        metrics_dict["val_r2"].append(  r_squared(y_pred_cuda_val_kf,   y_val_kf_tensor).item())
+
+        # Convert predictions to DataFrame aligned with y_val_kf
+        df_pred_val = pd.DataFrame(
+            y_pred_cuda_val_kf.detach().cpu().numpy(),
+            index=y_val_kf.index,
+            columns=y_val_kf.columns,
+        )
+
+        # Safe metrics over all targets; return NaN if no valid pairs
+        rmse_val = safe_rmse_df(y_val_kf, df_pred_val)
+        mae_val  = safe_mae_df(y_val_kf,  df_pred_val)
+        msle_val = safe_msle_df(y_val_kf, df_pred_val)
+
+        metrics_dict["rmse"].append(rmse_val)
+        metrics_dict["mae"].append(mae_val)
+        metrics_dict["msle"].append(msle_val)
+
+        # Per-fold diagnostic
+        valid_pairs_count = np.sum(np.isfinite(y_val_kf.values) & np.isfinite(df_pred_val.values))
+        print(f"Fold {count}: valid (y_true, y_pred) pairs across all targets = {valid_pairs_count}")
+        print(f"Fold {count}: val R2 = {metrics_dict['val_r2'][-1]:.4f}, RMSE = {rmse_val}, MAE = {mae_val}, MSLE = {msle_val}")
+
+        # FIXED: use aligned, shared-mask per column to compute per-target R2
+        just_eval_dict = get_performance_scores_aligned(y_val_kf, df_pred_val)
+        just_eval_dict_list.append(just_eval_dict)
+
+        print(f"K-{count} done")
+
+    # NaN-aware summary statistics for cross-validation metrics
+    cv_dictio = {metric: _nanaware_summary(values) for metric, values in metrics_dict.items()}
+
+    return cv_dictio, losses_dict_cv, just_eval_dict_list

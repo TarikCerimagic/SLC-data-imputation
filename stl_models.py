@@ -1,6 +1,7 @@
 import random
 import numpy as np
 import pandas as pd
+import re
 
 import optuna
 
@@ -52,7 +53,7 @@ def objective_rf(trial, X_train, y_train, X_val, y_val):
 
 
 
-def single_task_train_with_summary(df, targets, n_trials=300, cv_folds=5):
+def strf_train_with_summary(df, targets, n_trials=300, cv_folds=5):
     """
     Performs target-wise hyperparameter optimization, training, and cross-validation 
     using RandomForestRegressor models for multiple targets.
@@ -125,15 +126,15 @@ def single_task_train_with_summary(df, targets, n_trials=300, cv_folds=5):
         r2_mean = np.mean(r2_scores)
         r2_std = np.std(r2_scores)
 
-        print(f"{target} CV MSE: {mse_mean:.4f} ± {mse_std:.4f}")
-        print(f"{target} CV R2 (q²): {r2_mean:.4f} ± {r2_std:.4f}")
+        print(f"{target} CV MSE: {mse_mean:.3f} ± {mse_std:.3f}")
+        print(f"{target} CV R2 (q²): {r2_mean:.3f} ± {r2_std:.3f}")
 
         # Store summary and results
         summary_rows.append({
-            'Target': target,
-            'Total Compounds': total_compounds,
-            'CV Q² ± SD': f"{r2_mean:.4f} ± {r2_std:.4f}",
-            'CV MSE ± SD': f"{mse_mean:.4f} ± {mse_std:.4f}"
+            'target_name': target,
+            'Compounds': total_compounds,
+            'ST-RF (Q²)': f"{r2_mean:.3f} ± {r2_std:.3f}",
+            'ST-RF (MSE)': f"{mse_mean:.3f} ± {mse_std:.3f}"
         })
 
         results[target] = {
@@ -264,16 +265,15 @@ def objective_stnn(trial, X_train, y_train, X_val, y_val):
     Returns:
     float: Validation mean squared error (MSE) for the trial configuration.
     """
-def objective_stnn(trial, X_train, y_train, X_val, y_val):
     nr_of_shared_layers = trial.suggest_int("nr_of_shared_layers", 2, 3)
     hidden_sizes = []
 
     hidden_size_1 = trial.suggest_int("hidden_size_1", 100, 1200, step=10)
     hidden_sizes.append(hidden_size_1)
-    hidden_size_2 = trial.suggest_int("hidden_size_2", 5, 500, step=10)
+    hidden_size_2 = trial.suggest_int("hidden_size_2", 5, 495, step=10)
     hidden_sizes.append(hidden_size_2)
     if nr_of_shared_layers == 3:
-        hidden_size_3 = trial.suggest_int("hidden_size_3", 5, 200, step=10)
+        hidden_size_3 = trial.suggest_int("hidden_size_3", 5, 195, step=10)
         hidden_sizes.append(hidden_size_3)
 
     dropout = trial.suggest_float("dropout", 0.07, 0.5, step=0.001)
@@ -344,12 +344,12 @@ def single_target_cv_stnn(train_val_con, target, best_params, cv_folds=5, epochs
         mse_scores.append(mean_squared_error(y_val, preds))
         r2_scores.append(r2_score(y_val, preds))
 
-    print(f"{target} CV MSE: {np.mean(mse_scores):.4f} ± {np.std(mse_scores):.4f}")
-    print(f"{target} CV R2: {np.mean(r2_scores):.4f} ± {np.std(r2_scores):.4f}")
+    print(f"{target} CV MSE: {np.mean(mse_scores):.3f} ± {np.std(mse_scores):.3f}")
+    print(f"{target} CV R2: {np.mean(r2_scores):.3f} ± {np.std(r2_scores):.3f}")
     return np.mean(r2_scores), np.std(r2_scores), np.mean(mse_scores), np.std(mse_scores)
 
 
-def multi_task_train_with_summary_stnn(df, targets, n_trials=300, cv_folds=5, epochs=300):
+def stdnn_train_with_summary(df, targets, n_trials=300, cv_folds=5, epochs=300):
     """
     Trains and optimizes single-target neural networks for multiple targets with Optuna,
     followed by cross-validation and summary generation.
@@ -422,13 +422,111 @@ def multi_task_train_with_summary_stnn(df, targets, n_trials=300, cv_folds=5, ep
         r2_mean, r2_std, mse_mean, mse_std = single_target_cv_stnn(train_val, target, best_params, cv_folds=cv_folds, epochs=epochs)
 
         summary_rows.append({
-            "Target": target,
-            "Total Compounds": total_compounds,
-            'CV Q² ± SD': f"{r2_mean:.4f} ± {r2_std:.4f}",
-            'CV MSE ± SD': f"{mse_mean:.4f} ± {mse_std:.4f}"
+            "target_name": target,
+            "Compounds": total_compounds,
+            'ST-DNN (Q²)': f"{r2_mean:.3f} ± {r2_std:.3f}",
+            'ST-DNN (MSE)': f"{mse_mean:.3f} ± {mse_std:.3f}"
         })
 
         results[target] = {"best_params": best_params, "cv_r2_mean": r2_mean}
 
     summary_df = pd.DataFrame(summary_rows)
     return results, summary_df
+
+
+
+
+# def st_performance_table(strf_s_df, stnn_s_df):
+
+#     # function to round both numbers in the string
+#     def round_values(s):
+#         q2, sd = s.split('±')
+#         q2 = round(float(q2.strip()), 3)
+#         sd = round(float(sd.strip()), 3)
+#         return f"{q2:.3f} ± {sd:.3f}"
+    
+#     # apply rounding
+#     strf_s_df['ST-RF (Q²)'] = strf_s_df['ST-RF (Q²)'].apply(round_values)
+
+#     #summary_df_stnn_rename_drop_mse = summary_df_stnn_rename.drop(columns='CV MSE ± SD - DNN')
+#     stnn_s_df['ST-DNN (Q²)'] = stnn_s_df['ST-DNN (Q²)'].apply(round_values)
+
+    # stdnn_strf = pd.merge(stnn_s_df, strf_s_df, on=['target_name', 'Compounds'], how='inner')
+
+    # stdnn_strf_drop_cn = stdnn_strf.drop(columns='Compounds')
+
+    # return stdnn_strf_drop_cn
+
+
+def data_content(tabular_data, nuft):
+    """
+    Processes tabular data to count target and family occurrences.
+
+    Args:
+        tabular_data (pd.DataFrame): DataFrame containing 'target_name' and 'family' columns.
+        nuft (pd.DataFrame): DataFrame containing 'target_name' and 'family' columns.
+
+    Returns:
+        pd.DataFrame: DataFrame with target and family compound counts.
+    """
+    target_counts_df = tabular_data["target_name"].value_counts().reset_index()
+    family_counts_df = tabular_data["family"].value_counts().reset_index()
+
+    target_counts_df_ucnf = target_counts_df.merge(
+        nuft[["target_name", "family"]], on="target_name", how="inner"
+    )
+    result_df = target_counts_df_ucnf.merge(family_counts_df, on="family", how="inner")
+    result_df.columns = ["target_name", "comp_count_targ", "family", "comp_count_fam"]
+
+    return result_df
+
+def extract_family(slc_name):
+    # Regex to match the desired part: letters followed by numbers
+    match = re.match(r"^[A-Za-z]+[0-9]+", slc_name)
+    return match.group(0) if match else None
+    
+
+
+def task_info_table(unip_chembl_name_assoc, tabular_df):
+
+    
+    unip_chembl_name_assoc_exch_fam = unip_chembl_name_assoc.copy()
+    unip_chembl_name_assoc_exch_fam["family"] = unip_chembl_name_assoc_exch_fam[
+        "target_name"
+    ].apply(extract_family)
+
+    
+    # Family names are associated to corresponding target names
+    tabular_df_family = pd.merge(
+        tabular_df,
+        unip_chembl_name_assoc_exch_fam[["target_name", "family"]],
+        on="target_name",
+        how="inner",
+    )
+
+    # Counts of compounds per target and family are calcualted
+    target_counts_df_ucnf = data_content(tabular_df_family, unip_chembl_name_assoc_exch_fam)
+
+    return target_counts_df_ucnf
+
+
+
+def mt_performance_tale(r2_matrix, target_counts_df_ucnf):
+    mean_r2 = r2_matrix.mean(axis=0)
+    std_r2 = r2_matrix.std(axis=0)
+
+    summary = pd.DataFrame({
+        "target_name": r2_matrix.columns,
+        "MT-DNN (Q²)": [f"{m:.3f} ± {s:.3f}" for m, s in zip(mean_r2, std_r2)]
+    })
+
+        # Count occurrences of each unique string in 'family'
+    counts = target_counts_df_ucnf['family'].value_counts()
+
+    # Add a new column with the count corresponding to each string
+    target_counts_df_ucnf['Family members'] = target_counts_df_ucnf['family'].map(counts)
+
+
+    target_counts_df_ucnf_mtl = pd.merge(target_counts_df_ucnf, summary, on='target_name', how='inner')
+
+    return target_counts_df_ucnf_mtl

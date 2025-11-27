@@ -160,7 +160,7 @@ def pad_lists(data):
     return padded_data
 
 
-def cv_plots(cddd_losses, ecfp_losses, eval_df):
+def cv_plots(cddd_losses, ecfp_losses, eval_df, save_fig=False):
     """
     Generates cross-validation loss plots with mean curves and confidence intervals
     for both CDDD and ECFP6 models.
@@ -269,7 +269,10 @@ def cv_plots(cddd_losses, ecfp_losses, eval_df):
     plt.yticks(fontsize=25)
     plt.legend(fontsize=30)
     plt.grid(True)
-    plt.savefig(r"results/learning_dynamics_og.png", format="png", dpi=1000)
+
+    # Save fiure
+    if save_fig == True:
+        plt.savefig(r"results/learning_dynamics_og.png", format="png", dpi=1000)
 
     # Display the plot
     plt.show()
