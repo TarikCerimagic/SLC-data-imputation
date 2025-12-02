@@ -462,9 +462,9 @@ def data_content(tabular_data, nuft):
     """
     Processes tabular data to count target and family occurrences.
 
-    Args:
-        tabular_data (pd.DataFrame): DataFrame containing 'target_name' and 'family' columns.
-        nuft (pd.DataFrame): DataFrame containing 'target_name' and 'family' columns.
+    Parameters:
+    tabular_data (pd.DataFrame): DataFrame containing 'target_name' and 'family' columns.
+    nuft (pd.DataFrame): DataFrame containing 'target_name' and 'family' columns.
 
     Returns:
         pd.DataFrame: DataFrame with target and family compound counts.
@@ -488,14 +488,28 @@ def extract_family(slc_name):
 
 
 def task_info_table(unip_chembl_name_assoc, tabular_df):
+    """
+    Construct a table of task information by assigning family identifiers to each target
+    and computing compound counts per target and per family.
 
-    
+    Parameters:
+    - unip_chembl_name_assoc : pd.DataFrame
+        DataFrame containing at least 'target_name' and any additional metadata used
+        to map targets to families.
+    - tabular_df : pd.DataFrame
+        DataFrame containing compound-target annotations, including a 'target_name' column.
+
+    Returns:
+    - pd.DataFrame
+        A dataframe containing per-target compound counts, family assignments,
+        and per-family compound counts.
+    """
+
     unip_chembl_name_assoc_exch_fam = unip_chembl_name_assoc.copy()
     unip_chembl_name_assoc_exch_fam["family"] = unip_chembl_name_assoc_exch_fam[
         "target_name"
     ].apply(extract_family)
 
-    
     # Family names are associated to corresponding target names
     tabular_df_family = pd.merge(
         tabular_df,
@@ -504,14 +518,35 @@ def task_info_table(unip_chembl_name_assoc, tabular_df):
         how="inner",
     )
 
-    # Counts of compounds per target and family are calcualted
-    target_counts_df_ucnf = data_content(tabular_df_family, unip_chembl_name_assoc_exch_fam)
+    # Counts of compounds per target and family
+    target_counts_df_ucnf = data_content(
+        tabular_df_family, unip_chembl_name_assoc_exch_fam
+    )
 
     return target_counts_df_ucnf
 
 
 
 def mt_performance_tale(r2_matrix, target_counts_df_ucnf):
+    """
+    Create a summary table of multitask model performance, including per-target
+    mean ± standard deviation Q² values and family-level compound statistics.
+
+    Parameters:
+    - r2_matrix : pd.DataFrame
+        DataFrame where each column corresponds to a target and each row contains
+        model predictions used to compute mean and standard deviation.
+    - target_counts_df_ucnf : pd.DataFrame
+        DataFrame containing compound counts per target and per family, including a
+        'family' column used for aggregating family membership.
+
+    Returns:
+    - pd.DataFrame
+        A merged dataframe containing target names, Q² performance values in the
+        format "mean ± sd", compound counts, family assignments, and the number of
+        members per family.
+    """
+
     mean_r2 = r2_matrix.mean(axis=0)
     std_r2 = r2_matrix.std(axis=0)
 
@@ -520,13 +555,218 @@ def mt_performance_tale(r2_matrix, target_counts_df_ucnf):
         "MT-DNN (Q²)": [f"{m:.3f} ± {s:.3f}" for m, s in zip(mean_r2, std_r2)]
     })
 
-        # Count occurrences of each unique string in 'family'
+    # Count occurrences per family
     counts = target_counts_df_ucnf['family'].value_counts()
 
-    # Add a new column with the count corresponding to each string
+    # Add family membership counts
     target_counts_df_ucnf['Family members'] = target_counts_df_ucnf['family'].map(counts)
 
-
-    target_counts_df_ucnf_mtl = pd.merge(target_counts_df_ucnf, summary, on='target_name', how='inner')
+    # Merge performance summary
+    target_counts_df_ucnf_mtl = pd.merge(
+        target_counts_df_ucnf, summary, on='target_name', how='inner'
+    )
 
     return target_counts_df_ucnf_mtl
+
+
+
+
+
+def check_rameing_data(df, drop_cols_list, list_of_targets, included_targets):
+    """
+    Removes columns that match strings in drop_cols_list,
+    and drops rows where all values from the 513th column onwards are None/NaN.
+    
+    Parameters:
+    - df: pandas DataFrame to clean
+    - drop_cols_list: list of column names to remove
+    
+    Returns:
+    - Cleaned pandas DataFrame
+    """
+    
+    # Drop columns matching the given list
+    df2 = df.drop(columns=[col for col in df.columns if col in drop_cols_list], errors='ignore').drop(columns='new_target_label')
+    
+
+    non_desc_columns = ['SMILES_stand', 'new_target_label'] + list_of_targets
+    length_of_desc = df.drop(columns=non_desc_columns).shape[1]
+
+    # Drop rows where all values from 513th column onwards are None/NaN
+    if df2.shape[1] >= (length_of_desc+1):
+        df_included = df2[~df2.iloc[:, (length_of_desc+1):].isna().all(axis=1)]#.shape
+
+
+    
+    return df_included
+
+
+def aggregate_performance_filter(target_counts_ucnf_mtl_stdnn_strf_drop, cddd_matrix, list_of_targets):
+    """
+    Filter targets based on the performance of three models (MT-DNN, ST-DNN, ST-RF) and
+    report the remaining dataset statistics.
+
+    This function:
+    - Extracts mean and standard deviation values from Q² performance strings 
+      formatted as 'value ± sd'
+    - Identifies targets where **at least one** model has a non-negative score
+    - Separates excluded targets (all three models < 0) and included targets
+    - Prints how many compounds, targets, and pChEMBL values remain
+    - Returns the filtered target dataframe
+    
+    Parameters:
+    - target_counts_ucnf_mtl_stdnn_strf_drop : pd.DataFrame
+        DataFrame containing target names, compound counts, and Q² scores in string format
+        for three models: 'MT-DNN (Q²)', 'ST-DNN (Q²)', 'ST-RF (Q²)'.
+    - cddd_matrix : pd.DataFrame
+        Compound–target matrix used to compute remaining compound counts after filtering.
+    - list_of_targets : list of str
+        Full list of target identifiers before filtering.
+    
+    Returns:
+    - pd.DataFrame
+        A filtered dataframe containing only targets where at least one model has Q² ≥ 0.
+    """
+    
+    pattern = r'([-+]?\d*\.\d+|\d+)\s*±\s*([-+]?\d*\.\d+|\d+)'
+
+    for model in ['MT-DNN', 'ST-DNN', 'ST-RF']:
+        col = f'{model} (Q²)'
+        
+        # Extract the numeric parts as new float columns
+        target_counts_ucnf_mtl_stdnn_strf_drop[[f'{model}_mean', f'{model}_sd']] = (
+            target_counts_ucnf_mtl_stdnn_strf_drop[col]
+            .str.extract(pattern)
+            .astype(float)
+        )
+
+    target_scores_in_scale = target_counts_ucnf_mtl_stdnn_strf_drop[
+        (target_counts_ucnf_mtl_stdnn_strf_drop['MT-DNN_mean'] >= 0) |
+        (target_counts_ucnf_mtl_stdnn_strf_drop['ST-DNN_mean'] >= 0) |
+        (target_counts_ucnf_mtl_stdnn_strf_drop['ST-RF_mean'] >= 0)
+    ]
+    
+    neg_target_scores_in_scale = target_counts_ucnf_mtl_stdnn_strf_drop[
+        (target_counts_ucnf_mtl_stdnn_strf_drop['MT-DNN_mean'] <= 0) &
+        (target_counts_ucnf_mtl_stdnn_strf_drop['ST-DNN_mean'] <= 0) &
+        (target_counts_ucnf_mtl_stdnn_strf_drop['ST-RF_mean'] <= 0)
+    ]
+    
+    excluded_targets = neg_target_scores_in_scale['target_name'].to_list()
+    included_targets = target_scores_in_scale['target_name'].to_list()
+
+    matrix_included = check_rameing_data(cddd_matrix, excluded_targets, list_of_targets, included_targets)
+
+    total_targets = len(list_of_targets)
+    remaining_targets = target_scores_in_scale['target_name'].nunique()
+
+    total_pchembl = target_counts_ucnf_mtl_stdnn_strf_drop['comp_count_targ'].sum()
+    remaining_pchembl = target_scores_in_scale['comp_count_targ'].sum()
+
+    print('After excluding targets with negative scores in all three models, data has:')
+    print(f' - Remaining compounds: {matrix_included.shape[0]}', 
+          f'- percentage: {round(((matrix_included.shape[0])/(cddd_matrix.shape[0]))*100, 3)}%')
+    print(f' - Remaining targets: {remaining_targets}',  
+          f'- percentage: {round(((remaining_targets)/(total_targets))*100, 3)}%')  
+    print(f' - Remaining pChEMBL values: {remaining_pchembl}', 
+          f'- percentage: {round(((remaining_pchembl)/(total_pchembl))*100, 3)}%')
+    
+    return target_scores_in_scale
+
+
+
+def weighted_agr_scores(df, scores):
+    """
+    Compute three forms of aggregated Q² performance across multiple targets:
+    (1) simple mean, (2) weighted by number of datapoints, and 
+    (3) weighted inversely by datapoints.
+
+    Parameters:
+    - df : pd.DataFrame
+        DataFrame containing model scores per target and a column 'comp_count_targ'
+        indicating the number of datapoints available for each target.
+    - scores : list of str
+        Column names corresponding to different model scores (e.g. ['MTL_mean', 'DNN_mean', 'RF_mean']).
+
+    Returns:
+    - dict
+        A dictionary with keys:
+            'Q2_equal_mean'           → list of simple means per score column  
+            'Q2_weighted_by_n'        → list of weighted means (by datapoint count)
+            'Q2_weighted_inverse_n'   → list of inverse-weighted means
+    """
+    
+    aggregate_results = {'Q2_equal_mean': [],
+                         'Q2_weighted_by_n': [],
+                         'Q2_weighted_inverse_n': []}
+
+    for score in scores:
+
+        # 1. Equal weighting (simple mean)
+        equal_q2 = df[score].mean()
+        aggregate_results['Q2_equal_mean'].append(round(equal_q2, 3))
+
+        # 2. Weighted by number of datapoints
+        weighted_q2_n = np.average(df[score], weights=df['comp_count_targ'])
+        aggregate_results['Q2_weighted_by_n'].append(round(weighted_q2_n, 3))
+
+        # 3. Weighted inversely by number of datapoints
+        inv_weights = 1 / df['comp_count_targ']
+        weighted_q2_inv = np.average(df[score], weights=inv_weights)
+        aggregate_results['Q2_weighted_inverse_n'].append(round(weighted_q2_inv, 3))
+
+        # Display results per score column
+        weighted_q2_results = {
+            'Q2_equal_mean': round(equal_q2, 3),
+            'Q2_weighted_by_n': round(weighted_q2_n, 3),
+            'Q2_weighted_inverse_n': round(weighted_q2_inv, 3)
+        }
+
+        print(score, weighted_q2_results)
+
+
+
+
+def compute_model_win_percentages(df, model_cols, weight_col='comp_count_targ'):
+    """
+    Compute unweighted, weighted, and inverse-weighted percentages of targets where each model performs best.
+
+    Parameters:
+    - df : pd.DataFrame
+        DataFrame containing model scores per target and the number of datapoints.
+    - model_cols : list of str
+        Columns corresponding to each model's score (e.g., ['MTL_mean', 'DNN_mean', 'RF_mean'])
+    - weight_col : str
+        Column name indicating the number of datapoints per target (default 'comp_count_targ')
+
+    Returns:
+    - dict with keys:
+        'unweighted': dict of % per model (each target counts equally)
+        'weighted': dict of % per model (targets weighted by number of datapoints)
+        'inverse_weighted': dict of % per model (targets with fewer datapoints weighted higher)
+    """
+    
+    # Step 1: Determine best model per row
+    df = df.copy()
+    df['best_model'] = df[model_cols].idxmax(axis=1)
+    
+    # Step 2: Unweighted percentages
+    unweighted = df['best_model'].value_counts(normalize=True).mul(100).to_dict()
+    
+    # Step 3: Weighted percentages (by datapoints)
+    total_points = df[weight_col].sum()
+    weighted = df.groupby('best_model')[weight_col].sum().div(total_points).mul(100).to_dict()
+    
+    # Step 4: Inverse-weighted percentages (less datapoints -> higher weight)
+    inv_weights = 1 / df[weight_col]
+    total_inv = inv_weights.sum()
+    inverse_weighted = df.groupby('best_model')[weight_col].apply(lambda x: (1/x).sum()).div(total_inv).mul(100).to_dict()
+    
+    return {
+        'unweighted': unweighted,
+        'weighted': weighted,
+        'inverse_weighted': inverse_weighted
+    }
+
+
+

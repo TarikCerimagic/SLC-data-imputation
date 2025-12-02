@@ -131,30 +131,32 @@ def print_prediction_metrics(
     return y_pred_test, test_loss, res_dict
 
 
+
 def pad_lists(data):
     """
     Pads a list of lists to the same length by:
-      - Prepending NaN to each list.
-      - Removing the first five elements.
-      - Padding the remaining elements with NaNs to match the longest list.
+      - Padding each list with NaN values at the end so all lists match the longest length.
+      - Removing the first five elements from each padded list.
+      - Ensuring that trimming never produces empty lists (padding occurs first).
 
     Parameters:
     data (list of lists): List of numerical lists of varying lengths.
 
     Returns:
-    list of lists: Padded lists with equal length.
+    list of lists: Padded and trimmed lists with equal length.
     """
-    max_length = max(len(lst) for lst in data)  # Find the longest list length
+    # Find the longest list length
+    max_length = max(len(lst) for lst in data)
+
     padded_data = []
 
     for lst in data:
-        padded_lst = [
-            np.nan
-        ]  # Prepend a NaN (previously 2 were mentioned but only 1 was used)
-        padded_lst.extend(lst[5:])  # Append values starting from index 5 onward
-        padded_lst += [np.nan] * (
-            max_length - len(padded_lst)
-        )  # Pad with NaNs to match max length
+        # Pad the list to the maximum length
+        padded_lst = lst + [np.nan] * (max_length - len(lst))
+
+        # Remove the first five elements
+        padded_lst = padded_lst[5:]
+
         padded_data.append(padded_lst)
 
     return padded_data
@@ -304,6 +306,7 @@ def evaluation_metrics_f1(res_dict_cd, cv_dictio_cddd):
     df_reorder = cd_metrics_pd[cd_metrics_pd.columns[-6:].tolist() + cd_metrics_pd.columns[:-6].tolist()].drop(columns='MTS')
     
     return df_reorder
+
 
 
 def concatanate_train_val_data(prediction_data_dict, imputation_data_dict):

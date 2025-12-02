@@ -55,6 +55,9 @@ The repository includes a main Jupyter Notebook, [SLC_final_mtdnn_imputation.ipy
 
 ### **Evaluation**
 - Assesses overall performance using scoring metrics.
+- **Benchmarking against 6 different imputation models**:
+  - scikit.learn: SimpleImputer, KNNImputer, IterativeImputer
+  - fancyimpute: SoftImpute, IterativeSVD, MatrixFactorization
 - Conducts cross-validation on prediction model splits.
 - Formats evaluation tables.
 - Plots learning dynamics using loss gradients.
@@ -62,13 +65,14 @@ The repository includes a main Jupyter Notebook, [SLC_final_mtdnn_imputation.ipy
 - Extracts outlier compounds and corresponding targets.
 - Identifies nearest neighbors of HEV and LEV compounds.
 - **Target-Based Evaluation**:
-  - Multi-task performance analysis.
-  - Chemical space analysis.
-  - Single-task performance analysis:
-    - Creates single-task splits for selected target subsets.
-    - Optimizes hyperparameters.
-    - Trains single-task models.
-    - Evaluates model performance.
+  - Develops single task modes for all 54 targets with:
+    - Single-task random forest
+    - Single-task deep neural networks
+  - Compares aggregate performance scores between MTL vs. STL: 
+    - Data filtering
+    - Weighted scoring
+  - Chemical space analysis of selected targets.
+
 
 ---
 
@@ -104,6 +108,7 @@ Ensure you have the following Python libraries with corresponding versions insta
 - `rdkit` (2024.03.5)
 - `pandas` (2.2.2)
 - `numpy` (1.24.4)
+- `fancyimpute` (0.7.0)
 
 ---
 
