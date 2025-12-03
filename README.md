@@ -80,8 +80,8 @@ The repository includes a main Jupyter Notebook, [SLC_final_mtdnn_imputation.ipy
 
 To install the required dependencies, use the appropriate YAML file based on your operating system:
 
-- **Windows:** [mtdnn_env_win.yaml](./mtdnn_env_win.yaml)
-- **Ubuntu/Linux:** [mtdnn_env_lin.yaml](./mtdnn_env_lin.yaml)
+- **Windows:** [mtdnn_env_win2.yaml](./mtdnn_env_win2.yaml)
+- **Ubuntu/Linux:** [mtdnn_env_lin2.yaml](./mtdnn_env_lin2.yaml)
 
 Run the following command to create a conda environment:
 
