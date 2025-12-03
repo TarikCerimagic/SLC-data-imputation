@@ -118,7 +118,7 @@ Ensure you have the following Python libraries with corresponding versions insta
 
 - Download the files from the repository.
 - Install the required libraries manually or via the YAML file.
-- Open [mtdnn_imputation.ipynb](./mtdnn_imputation.ipynb) and select the installed environment.
+- Open [SLC_mtdnn_imputation.ipynb](./SLC_mtdnn_imputation.ipynb) and select the installed environment.
 
 ### **Using the Jupyter Notebook**
 
