@@ -87,10 +87,10 @@ Run the following command to create a conda environment:
 
 ```sh
 # For Windows
-conda env create -f mtdnn_env_env.yaml  
+conda env create -f mtdnn_env_win2.yaml  
 
 # For Ubuntu/Linux
-conda env create -f mtdnn_env_lin.yaml  
+conda env create -f mtdnn_env_lin2.yaml  
 ```
 
 ---
