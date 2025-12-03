@@ -1,0 +1,21 @@
+name: mtdnn_env_lin
+channels:
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - python==3.11.5
+  - umap-learn=0.5.5
+  - optuna=3.6.1
+  - ipykernel
+  - conda-forge::chembl_webresource_client
+  - scikit-learn=1.5.1
+  - scipy=1.13.0
+  - matplotlib=3.9.1
+  - conda-forge::rdkit
+  - pandas=2.2.2
+  - torchaudio==2.3.0
+  - torchvision==0.18.0
+  - pytorch-cuda=12.1
+  - pytorch==2.3.0
+  - conda-forge::openpyxl
+prefix: /home/tarikadmin/anaconda3/envs/mtdnn_env_lin
