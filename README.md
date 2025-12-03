@@ -19,7 +19,7 @@ This repository contains a Jupyter Notebook that integrates multiple functions f
 
 ## Overview
 
-The repository includes a main Jupyter Notebook, [SLC_final_mtdnn_imputation.ipynb](./SLC_final_mtdnn_imputation.ipynb), along with supporting Python scripts that provide functional tools for developing and evaluating a data imputation model using multi-task learning. The notebook presents a streamlined workflow with chained functions for a clear overview of the project. Users can interact with input and output variables without delving into low-level code details. Alternatively, individual functions can be explored in their respective scripts for deeper analysis.
+The repository includes a main Jupyter Notebook, [SLC_mtdnn_imputation.ipynb](./SLC_mtdnn_imputation.ipynb), along with supporting Python scripts that provide functional tools for developing and evaluating a data imputation model using multi-task learning. The notebook presents a streamlined workflow with chained functions for a clear overview of the project. Users can interact with input and output variables without delving into low-level code details. Alternatively, individual functions can be explored in their respective scripts for deeper analysis.
 
 ---
 
