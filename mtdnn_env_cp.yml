@@ -1,0 +1,57 @@
+name: mtdnn_env_cross
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.11.5
+  - pip
+
+  # ===== Version-pinned core scientific stack =====
+  - numpy=1.24.4
+  - pandas=2.2.2
+  - scikit-learn=1.5.1
+  - scipy=1.13.0
+  - matplotlib=3.9.1
+  - rdkit=2024.03.5
+  - h5py
+  - tqdm
+  - joblib
+  - networkx
+  - pillow
+  - ipykernel
+
+  # CPU fallback PyTorch via conda (safe for all OS)
+  - pytorch=2.3.0
+
+  - pip:
+      # ===== Linux: CUDA-enabled PyTorch (2.3.0) =====
+      - torch==2.3.0 --index-url https://download.pytorch.org/whl/cu121 ; platform_system == "Linux"
+
+      # ===== Windows: normal PyTorch wheel =====
+      - torch==2.3.0 ; platform_system == "Windows"
+
+      # ===== Explicit packages =====
+      - umap-learn==0.5.5
+      - optuna==3.6.1
+      - chembl-webresource-client==0.10.9
+      - fancyimpute==0.7.0
+
+      # ===== Additional ML pip packages =====
+      - numpy-financial
+      - scikit-multilearn
+      - pytorch-lightning
+      - einops
+      - tensorboard
+      - wandb
+      - matplotlib-venn
+      - pandas-flavor
+      - pyarrow
+      - pyreadstat
+      - mlflow
+      - rich
+      - lightning-utilities
+      - chemprop
+
