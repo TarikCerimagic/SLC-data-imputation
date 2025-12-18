@@ -1,4 +1,4 @@
-# A Multi-Task Learning Approach for Data Imputation of Compound Bioactivity Values for the SLC Transporter Superfamily
+# A Multi-Task Learning Approach for Prediction of Missing Bioactivity Values of Compounds for the SLC Transporter Superfamily
 
 This repository contains a Jupyter Notebook that integrates multiple functions from various Python scripts to import, process, standardize, optimize, train, and evaluate a multi-task deep neural network (MTDNN) for data imputation of pChEMBL values across SLC protein targets.
 
